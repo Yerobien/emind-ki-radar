@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>KI-Radar</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div class="wrap">
+  <div class="row"><h1 class="brand">eMind <b>KI-Radar</b></h1><span class="grow"></span><span class="muted" id="hello"></span></div>
+
+  <!-- Anmelden -->
+  <div class="card" id="joinCard" style="margin-top:14px;max-width:560px">
+    <h2>Mitmachen</h2>
+    <p class="muted" style="margin-top:0">Welche Aufgaben aus deinem Alltag könnte eine KI übernehmen oder beschleunigen? Reich Ideen ein, bewerte die der anderen – daraus entsteht unsere Roadmap.</p>
+    <form id="joinForm">
+      <label>Name</label><input id="jName" maxlength="40" required style="width:100%">
+      <label>Bereich</label><select id="jTeam" style="width:100%"></select>
+      <label>Wie oft nutzt du KI heute bei der Arbeit?</label><select id="jUse" style="width:100%"></select>
+      <label>Was bremst dich am meisten?</label><select id="jBlock" style="width:100%"></select>
+      <div style="margin-top:14px"><button class="primary">Los geht's</button></div>
+    </form>
+  </div>
+
+  <div id="app" style="display:none">
+    <div class="tabs">
+      <button data-tab="add" class="on">Idee einreichen</button>
+      <button data-tab="vote">Bewerten <span id="openCnt"></span></button>
+      <button data-tab="road">Roadmap</button>
+    </div>
+
+    <!-- Einreichen -->
+    <div class="card" data-pane="add" style="max-width:640px">
+      <h2>Neue Idee</h2>
+      <form id="addForm">
+        <label>Was machst du heute von Hand, das eine KI übernehmen könnte?</label>
+        <input id="aTitle" maxlength="120" required placeholder="z. B. Patch-Report für den Chef zusammenstellen" style="width:100%">
+        <label>Kurz beschrieben (optional): Wie läuft es heute, was wäre mit KI anders?</label>
+        <textarea id="aDesc" maxlength="600" style="width:100%"></textarea>
+        <div class="row">
+          <div class="grow"><label>Bereich</label><select id="aTeam" style="width:100%"></select></div>
+          <div class="grow"><label>Wie oft?</label><select id="aFreq" style="width:100%"></select></div>
+          <div class="grow"><label>Minuten pro Mal</label><input id="aMin" type="number" min="0" max="2400" value="30" style="width:100%"></div>
+        </div>
+        <div style="margin-top:14px"><button class="primary">Einreichen</button></div>
+      </form>
+    </div>
+
+    <!-- Bewerten -->
+    <div data-pane="vote" style="display:none">
+      <p class="muted">Bewerte jede Idee: <b>Nutzen</b> (1 = kaum, 5 = riesig) und <b>Aufwand</b> der Umsetzung (1 = schnell gemacht, 5 = großes Projekt). Unbewertete stehen oben.</p>
+      <div id="voteList"></div>
+    </div>
+
+    <!-- Roadmap -->
+    <div data-pane="road" style="display:none">
+      <div class="card" style="margin-bottom:12px"><h2>Nutzen / Aufwand</h2><div id="matrix"></div></div>
+      <div class="roadmap" id="roadmap"></div>
+    </div>
+  </div>
+</div>
+<div id="toast"></div>
+<script src="/socket.io/socket.io.js"></script>
+<script src="/common.js"></script>
+<script>
+const socket = io();
+let S = null, me = null;
+const $ = id => document.getElementById(id);
+const opt = (sel, items, val) => (sel.innerHTML = items.map(([v, l]) => `<option value="${esc(v)}" ${v === val ? 'selected' : ''}>${esc(l)}</option>`).join(''));
+let toastT;
+function toast(m) { const t = $('toast'); t.textContent = m; t.style.opacity = 1; clearTimeout(toastT); toastT = setTimeout(() => (t.style.opacity = 0), 1800); }
+
+function fillForms() {
+  const m = S.meta;
+  if (!$('jTeam').options.length) {
+    opt($('jTeam'), m.teams.map(t => [t, t]));
+    opt($('jUse'), m.kiUse.map(t => [t, t]));
+    opt($('jBlock'), m.blockers.map(t => [t, t]));
+    opt($('aFreq'), Object.entries(m.freqs).map(([k, v]) => [k, v.label]), 'woechentlich');
+    $('jName').value = store.get('kr_name') || '';
+  }
+  if (!$('aTeam').options.length) opt($('aTeam'), m.teams.map(t => [t, t]));
+}
+function enter(state) {
+  me = state; store.set('kr_pid', me.pid); store.set('kr_name', me.name);
+  $('joinCard').style.display = 'none'; $('app').style.display = 'block';
+  $('hello').textContent = `Hallo ${me.name}`;
+  fillForms(); $('aTeam').value = me.team; render();
+}
+
+$('joinForm').addEventListener('submit', e => {
+  e.preventDefault();
+  socket.emit('join', { pid: store.get('kr_pid'), name: $('jName').value, team: $('jTeam').value, kiUse: $('jUse').value, blocker: $('jBlock').value }, enter);
+});
+socket.on('connect', () => { const pid = store.get('kr_pid'); if (pid) socket.emit('resume', pid, st => st && enter(st)); });
+
+$('addForm').addEventListener('submit', e => {
+  e.preventDefault();
+  socket.emit('addIdea', { title: $('aTitle').value, desc: $('aDesc').value, team: $('aTeam').value, freq: $('aFreq').value, minutes: $('aMin').value }, r => {
+    if (r.err) return toast(r.err);
+    $('aTitle').value = ''; $('aDesc').value = ''; toast('Danke! Idee ist drin.');
+  });
+});
+
+document.querySelector('.tabs').addEventListener('click', e => {
+  const t = e.target.closest('button'); if (!t) return;
+  document.querySelectorAll('.tabs button').forEach(b => b.classList.toggle('on', b === t));
+  document.querySelectorAll('[data-pane]').forEach(p => (p.style.display = p.dataset.pane === t.dataset.tab ? 'block' : 'none'));
+  render();
+});
+
+// Bewertungen, die gerade bearbeitet, aber noch nicht gespeichert sind
+const draft = {};
+function voteCard(i) {
+  const v = draft[i.id] || (me.votes[i.id] ? { ...me.votes[i.id] } : { nutzen: 0, aufwand: 0, metoo: false, pilot: false });
+  const scale = (k) => `<span class="scale" data-k="${k}">${[1, 2, 3, 4, 5].map(n => `<button type="button" data-n="${n}" class="${v[k] === n ? 'on' : ''}">${n}</button>`).join('')}</span>`;
+  const done = !!me.votes[i.id];
+  return `<div class="card vote-card ${done ? 'done' : ''}" data-id="${esc(i.id)}">
+    <div class="vt">${esc(i.title)}</div>
+    <div class="vd">${esc(i.team)} · ${esc((S.meta.freqs[i.freq] || {}).label || '')}, ca. ${i.minutes} Min. · von ${esc(i.author)}${i.desc ? ` – ${esc(i.desc)}` : ''}</div>
+    <div class="vr">
+      <span>Nutzen ${scale('nutzen')}</span><span>Aufwand ${scale('aufwand')}</span>
+      <label class="check"><input type="checkbox" data-c="metoo" ${v.metoo ? 'checked' : ''}> betrifft mich auch</label>
+      <label class="check"><input type="checkbox" data-c="pilot" ${v.pilot ? 'checked' : ''}> ich würde pilotieren</label>
+      <button class="primary" data-save ${v.nutzen && v.aufwand ? '' : 'disabled'}>${done ? 'Aktualisieren' : 'Speichern'}</button>
+    </div></div>`;
+}
+$('voteList').addEventListener('click', e => {
+  const card = e.target.closest('.vote-card'); if (!card) return;
+  const id = card.dataset.id;
+  const cur = draft[id] || (me.votes[id] ? { ...me.votes[id] } : { nutzen: 0, aufwand: 0, metoo: false, pilot: false });
+  const n = e.target.dataset.n, k = e.target.closest('.scale') && e.target.closest('.scale').dataset.k;
+  if (n && k) { cur[k] = +n; draft[id] = cur; card.outerHTML = voteCard(S.ideas.find(i => i.id === id)); return; }
+  if (e.target.dataset.c) { cur[e.target.dataset.c] = e.target.checked; draft[id] = cur; return; }
+  if (e.target.hasAttribute('data-save')) {
+    socket.emit('vote', { id, ...cur }, st => { if (st.err) return toast(st.err); me = st; delete draft[id]; toast('Gespeichert'); renderVotes(); });
+  }
+});
+function renderVotes() {
+  const list = S.ideas.filter(i => i.status !== 'Verworfen')
+    .sort((a, b) => (!!me.votes[a.id] - !!me.votes[b.id]) || b.createdAt - a.createdAt);
+  const open = list.filter(i => !me.votes[i.id]).length;
+  $('openCnt').textContent = open ? `(${open} offen)` : '';
+  // Karten, an denen gerade gearbeitet wird, nicht neu zeichnen
+  if (Object.keys(draft).length && $('voteList').children.length) return;
+  $('voteList').innerHTML = list.length ? list.map(voteCard).join('') : '<p class="muted">Noch keine Ideen – reich die erste ein!</p>';
+}
+function render() {
+  if (!S || !me) return;
+  renderVotes();
+  if ($('app').querySelector('[data-pane="road"]').style.display !== 'none') {
+    renderMatrix($('matrix'), S.ideas, { labels: 6 });
+    renderRoadmap($('roadmap'), S.ideas);
+  }
+}
+socket.on('state', st => { S = st; fillForms(); render(); });
+</script>
+</body>
+</html>

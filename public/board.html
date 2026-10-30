@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>KI-Radar – Beamer</title>
+<link rel="stylesheet" href="/style.css">
+<style>
+  body { font-size: 16px; }
+  .board { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 14px; padding: 16px; }
+  .top { display: grid; grid-template-columns: auto 1fr auto; gap: 16px; align-items: center; padding: 16px 16px 0; }
+  .join { display: flex; gap: 10px; align-items: center; }
+  .join img { width: 96px; height: 96px; background: #fff; border-radius: 8px; padding: 4px; }
+  .join .u { font: 700 14px ui-monospace, Consolas, monospace; max-width: 220px; word-break: break-all; }
+  .stats { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; padding: 0 16px 16px; }
+  @media (max-width: 1000px) { .board, .stats, .top { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="top">
+  <h1 class="brand">eMind <b>KI-Radar</b></h1>
+  <div class="kpis" id="kpis"></div>
+  <div class="join"><img src="/qr.svg" alt="QR-Code zum Mitmachen"><div><div class="muted" style="font-size:13px">Mitmachen:</div><div class="u" id="url"></div></div></div>
+</div>
+<div class="board">
+  <div class="card"><h2>Nutzen / Aufwand</h2><div id="matrix"></div></div>
+  <div class="card"><h2>Roadmap</h2><div class="roadmap" id="roadmap"></div></div>
+</div>
+<div class="stats">
+  <div class="card" id="useBars"></div>
+  <div class="card" id="blockBars"></div>
+  <div class="card" id="teamBars"></div>
+</div>
+<script src="/socket.io/socket.io.js"></script>
+<script src="/common.js"></script>
+<script>
+const socket = io();
+fetch('/info').then(r => r.json()).then(i => (document.getElementById('url').textContent = i.joinUrl));
+socket.on('state', S => {
+  renderKpis(document.getElementById('kpis'), S.stats);
+  renderMatrix(document.getElementById('matrix'), S.ideas, { labels: 10 });
+  renderRoadmap(document.getElementById('roadmap'), S.ideas, { max: 5 });
+  renderBars(document.getElementById('useBars'), 'Wie oft nutzt ihr KI?', S.meta.kiUse, S.stats.byUse);
+  renderBars(document.getElementById('blockBars'), 'Was bremst am meisten?', S.meta.blockers, S.stats.byBlocker);
+  renderBars(document.getElementById('teamBars'), 'Wer ist dabei?', S.meta.teams, S.stats.byTeam);
+});
+</script>
+</body>
+</html>

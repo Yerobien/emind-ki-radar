@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>KI-Radar – Admin</title>
+<link rel="stylesheet" href="/style.css">
+<style>
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  th, td { text-align: left; padding: 6px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; white-space: nowrap; cursor: pointer; }
+  td input, td select { padding: 4px 6px; font-size: 13px; width: 100%; }
+  td.num { text-align: right; white-space: nowrap; }
+  .tt { font-weight: 650; }
+  .dd { color: var(--muted); font-size: 12px; }
+  .tablewrap { overflow-x: auto; }
+</style>
+</head>
+<body>
+<div class="wrap" style="max-width:1400px">
+  <div class="row"><h1 class="brand">eMind <b>KI-Radar</b> · Admin</h1><span class="grow"></span>
+    <a href="/board" target="_blank">Beamer-Ansicht</a></div>
+  <div id="locked" class="card" style="display:none;margin-top:14px">Kein oder falscher Admin-Key. Öffne <code>/admin?key=DEIN_KEY</code>.</div>
+  <div id="appEl">
+    <div class="kpis" id="kpis" style="margin:14px 0"></div>
+    <div class="card" style="margin-bottom:14px">
+      <h2>Daten sichern</h2>
+      <div class="row">
+        <a id="expJson"><button>Export JSON (Backup)</button></a>
+        <a id="expCsv"><button>Export CSV (Excel)</button></a>
+        <label class="check" style="margin-left:10px">Import JSON: <input type="file" id="imp" accept=".json,application/json"></label>
+      </div>
+      <p class="muted" style="margin:8px 0 0;font-size:13px">Auf Render Free gehen die Daten bei Neustart/Deploy verloren → nach dem Event JSON exportieren und bei Bedarf wieder importieren.</p>
+    </div>
+    <div class="card tablewrap">
+      <h2>Ideen <span class="muted" style="text-transform:none;letter-spacing:0">(Klick auf Spaltenkopf sortiert; „Roadmap: Auto“ folgt der Matrix)</span></h2>
+      <table>
+        <thead><tr>
+          <th data-s="title">Idee</th><th data-s="n">Bew.</th><th data-s="nutzen">N Ø</th><th data-s="aufwand">A Ø</th>
+          <th data-s="metoo">Betr.</th><th data-s="pilot">Pilot</th><th data-s="hours">h/Mon.</th><th data-s="quadrant">Quadrant</th>
+          <th>Roadmap</th><th>Status</th><th>Verantwortlich</th><th>Dublette von</th><th></th>
+        </tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+<div id="toast"></div>
+<script src="/socket.io/socket.io.js"></script>
+<script src="/common.js"></script>
+<script>
+const socket = io();
+const key = new URLSearchParams(location.search).get('key') || '';
+const $ = id => document.getElementById(id);
+let S = null, sortKey = 'hours', sortDir = -1, editing = false;
+let toastT;
+function toast(m) { const t = $('toast'); t.textContent = m; t.style.opacity = 1; clearTimeout(toastT); toastT = setTimeout(() => (t.style.opacity = 0), 1800); }
+const k = encodeURIComponent(key);
+$('expJson').href = `/export.json?key=${k}`; $('expCsv').href = `/export.csv?key=${k}`;
+
+socket.on('connect', () => socket.emit('admin', { key, cmd: 'hello' }, r => {
+  if (r.err) { $('locked').style.display = 'block'; $('appEl').style.display = 'none'; }
+}));
+const send = (d, msg) => socket.emit('admin', { key, ...d }, r => toast(r.err || msg || 'Gespeichert'));
+
+$('imp').addEventListener('change', async e => {
+  const f = e.target.files[0]; if (!f) return;
+  if (!confirm('Aktuelle Daten durch die Datei ersetzen?')) return;
+  const r = await fetch(`/import?key=${k}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: await f.text() });
+  toast(r.ok ? 'Import erfolgreich' : 'Import fehlgeschlagen: ' + (await r.text()));
+});
+
+document.querySelector('thead').addEventListener('click', e => {
+  const s = e.target.dataset.s; if (!s) return;
+  sortDir = sortKey === s ? -sortDir : -1; sortKey = s; render(true);
+});
+const tbody = $('rows');
+tbody.addEventListener('focusin', () => (editing = true));
+tbody.addEventListener('focusout', () => { editing = false; setTimeout(() => render(), 300); });
+tbody.addEventListener('change', e => {
+  const id = e.target.closest('tr').dataset.id, f = e.target.dataset.f;
+  if (f === 'merge') { if (e.target.value && confirm('Diese Idee in die gewählte zusammenführen (Stimmen werden übernommen)?')) send({ cmd: 'merge', id, target: e.target.value }, 'Zusammengeführt'); else e.target.value = ''; return; }
+  send({ cmd: 'update', id, [f]: e.target.value });
+});
+tbody.addEventListener('click', e => {
+  if (!e.target.hasAttribute('data-del')) return;
+  const id = e.target.closest('tr').dataset.id;
+  if (confirm('Idee wirklich löschen?')) send({ cmd: 'delete', id }, 'Gelöscht');
+});
+
+function render(force) {
+  if (!S || (editing && !force)) return;
+  renderKpis($('kpis'), S.stats);
+  const v = i => (i[sortKey] == null ? -1 : i[sortKey]);
+  const list = S.ideas.slice().sort((a, b) => (v(a) > v(b) ? 1 : v(a) < v(b) ? -1 : 0) * sortDir);
+  const sel = (f, opts, cur) => `<select data-f="${f}">${opts.map(([val, l]) => `<option value="${esc(val)}" ${val === cur ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select>`;
+  tbody.innerHTML = list.map(i => `<tr data-id="${esc(i.id)}">
+    <td><div class="tt">${esc(i.title)}</div><div class="dd">${esc(i.team)} · ${esc((S.meta.freqs[i.freq] || {}).label || '')} · ${i.minutes} Min. · von ${esc(i.author)}${i.desc ? `<br>${esc(i.desc)}` : ''}</div></td>
+    <td class="num">${i.n}</td><td class="num">${fmt1(i.nutzen)}</td><td class="num">${fmt1(i.aufwand)}</td>
+    <td class="num">${i.metoo}</td><td class="num">${i.pilot}</td><td class="num">${fmtH(i.hours)}</td><td>${esc(i.quadrant)}</td>
+    <td>${sel('lane', [['', `Auto (${i.laneAuto ? i.lane : '…'})`], ...S.meta.lanes.map(l => [l, l])], i.laneAuto ? '' : i.lane)}</td>
+    <td>${sel('status', S.meta.status.map(s => [s, s]), i.status)}</td>
+    <td><input data-f="owner" value="${esc(i.owner)}" placeholder="Name"></td>
+    <td>${sel('merge', [['', '–'], ...S.ideas.filter(o => o.id !== i.id).map(o => [o.id, o.title.slice(0, 40)])], '')}</td>
+    <td><button data-del title="Löschen">✕</button></td></tr>`).join('') || '<tr><td colspan="13" class="muted">Noch keine Ideen.</td></tr>';
+}
+socket.on('state', st => { S = st; render(); });
+</script>
+</body>
+</html>
